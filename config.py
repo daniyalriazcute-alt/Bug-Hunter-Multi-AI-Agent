@@ -6,20 +6,29 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# ─── LLM ────────────────────────────────────────────────────────────────────
 GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MODEL: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 LLM_TEMPERATURE: float = 0.2
 LLM_MAX_TOKENS: int = 4096
 LLM_MAX_RETRIES: int = 4
 LLM_BACKOFF_BASE: float = 1.5
 
+# ─── Paths ──────────────────────────────────────────────────────────────────
 BASE_DIR: Path = Path(__file__).parent
 REPORT_DIR: Path = BASE_DIR / os.getenv("REPORT_DIR", "reports")
 REPORT_DIR.mkdir(exist_ok=True, parents=True)
 
+# ─── Recon ──────────────────────────────────────────────────────────────────
 MAX_RECON_PORTS: int = int(os.getenv("MAX_RECON_PORTS", "1000"))
-DEFAULT_TIMEOUT: int = 30
+DEFAULT_TIMEOUT: int = 30  # seconds per external tool call
 
+# ─── Nuclei (specific timeouts) ─────────────────────────────────────────────
+NUCLEI_TEMPLATE_TIMEOUT: int = int(os.getenv("NUCLEI_TEMPLATE_TIMEOUT", "300"))
+NUCLEI_SCAN_TIMEOUT: int = int(os.getenv("NUCLEI_SCAN_TIMEOUT", "60"))
+NUCLEI_RATE_LIMIT: int = int(os.getenv("NUCLEI_RATE_LIMIT", "50"))
+
+# ─── Severity mapping (CVSS v3.1) ───────────────────────────────────────────
 SEVERITY_RANGES = {
     "Critical": (9.0, 10.0),
     "High":     (7.0, 8.9),
@@ -36,6 +45,7 @@ SEVERITY_COLORS = {
     "Info":     "#0288D1",
 }
 
+# ─── Safety ─────────────────────────────────────────────────────────────────
 LEGAL_BANNER: str = (
     "⚠️ LEGAL NOTICE: Only test systems you own or have explicit written "
     "permission to test. Unauthorized access is illegal."
