@@ -6,17 +6,26 @@ import streamlit as st
 from config import LEGAL_BANNER, GROQ_MODEL
 from graph import BUG_HUNTER_GRAPH
 
+# Optional: pre-warm nuclei so the first scan isn't slowed by the download
+try:
+    from tools.nuclei_installer import ensure_nuclei
+    ensure_nuclei()
+except Exception:
+    pass  # silent — agent will retry later if needed
+
 st.set_page_config(
     page_title="Bug Hunter Multi-AI",
     page_icon="🐛",
     layout="wide",
 )
 
+# ─── Session state init ─────────────────────────────────────────────────────
 if "state" not in st.session_state:
     st.session_state.state = {}
 if "running" not in st.session_state:
     st.session_state.running = False
 
+# ─── Header ─────────────────────────────────────────────────────────────────
 st.title("🐛 Bug Hunter Multi-AI Agent")
 st.caption(f"Powered by Groq · Model: `{GROQ_MODEL}` · LangGraph Orchestration")
 st.error(LEGAL_BANNER)
