@@ -1,6 +1,5 @@
 """Download the nuclei binary at runtime (for platforms without apt package)."""
 from __future__ import annotations
-import os
 import platform
 import shutil
 import stat
@@ -11,31 +10,81 @@ from pathlib import Path
 
 import requests
 
-NUCLEI_VERSION = "3.3.7"  # pin a known-good release
+# Try a recent known-good release. If this 404s, the installer will fall back
+# to querying the GitHub API for the latest stable release.
+NUCLEI_VERSION = "3.3.7"
 BIN_DIR = Path.home() / ".local" / "bin"
 NUCLEI_BIN = BIN_DIR / "nuclei"
 
-# GitHub release URL pattern
-_RELEASE_BASE = (
-    f"https://github.com/projectdiscovery/nuclei/releases/download/"
-    f"v{NUCLEI_VERSION}"
-)
+
+def _github_latest_version() -> str | None:
+    """Query GitHub API for the latest nuclei release tag."""
+    try:
+        r = requests.get(
+            "https://api.github.com/repos/projectdiscovery/nuclei/releases/latest",
+            timeout=20,
+            headers={"Accept": "application/vnd.github+json"},
+        )
+        r.raise_for_status()
+        tag = r.json().get("tag_name", "")
+        return tag.lstrip("v") or None
+    except Exception:
+        return None
 
 
-def _detect_asset_name() -> str:
+def _detect_asset_name(version: str) -> str:
     """Return the correct nuclei release asset for this platform."""
     system = platform.system().lower()
     machine = platform.machine().lower()
 
     if system == "linux":
         arch = "arm64" if machine in ("aarch64", "arm64") else "amd64"
-        return f"nuclei_{NUCLEI_VERSION}_linux_{arch}.zip"
+        return f"nuclei_{version}_linux_{arch}.zip"
     if system == "darwin":
         arch = "arm64" if machine in ("arm64", "aarch64") else "amd64"
-        return f"nuclei_{NUCLEI_VERSION}_macOS_{arch}.zip"
+        return f"nuclei_{version}_macOS_{arch}.zip"
     if system == "windows":
-        return f"nuclei_{NUCLEI_VERSION}_windows_amd64.zip"
+        return f"nuclei_{version}_windows_amd64.zip"
     raise RuntimeError(f"Unsupported platform: {system}/{machine}")
+
+
+def _download_and_extract(version: str) -> bool:
+    """Download nuclei of the given version and extract the binary."""
+    asset = _detect_asset_name(version)
+    url = (
+        f"https://github.com/projectdiscovery/nuclei/releases/download/"
+        f"v{version}/{asset}"
+    )
+    archive_path = BIN_DIR / asset
+
+    # Download
+    with requests.get(url, stream=True, timeout=120) as r:
+        r.raise_for_status()
+        with open(archive_path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=65536):
+                f.write(chunk)
+
+    # Extract
+    extracted = False
+    if asset.endswith(".zip"):
+        with zipfile.ZipFile(archive_path, "r") as z:
+            for name in z.namelist():
+                if name.endswith("nuclei") or name.endswith("nuclei.exe"):
+                    with z.open(name) as src, open(NUCLEI_BIN, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                    extracted = True
+                    break
+    elif asset.endswith(".tar.gz"):
+        with tarfile.open(archive_path, "r:gz") as t:
+            for member in t.getmembers():
+                if member.name.endswith("nuclei"):
+                    member.name = "nuclei"
+                    t.extract(member, path=BIN_DIR)
+                    extracted = True
+                    break
+
+    archive_path.unlink(missing_ok=True)
+    return extracted
 
 
 def ensure_nuclei() -> str | None:
@@ -52,41 +101,26 @@ def ensure_nuclei() -> str | None:
     if NUCLEI_BIN.exists():
         return str(NUCLEI_BIN)
 
-    # Try to download
     try:
         BIN_DIR.mkdir(parents=True, exist_ok=True)
-        asset = _detect_asset_name()
-        url = f"{_RELEASE_BASE}/{asset}"
-        archive_path = BIN_DIR / asset
 
-        # Download
-        with requests.get(url, stream=True, timeout=60) as r:
-            r.raise_for_status()
-            with open(archive_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=65536):
-                    f.write(chunk)
-
-        # Extract
-        if asset.endswith(".zip"):
-            with zipfile.ZipFile(archive_path, "r") as z:
-                for name in z.namelist():
-                    if name.endswith("nuclei") or name.endswith("nuclei.exe"):
-                        with z.open(name) as src, open(NUCLEI_BIN, "wb") as dst:
-                            shutil.copyfileobj(src, dst)
-                        break
-        elif asset.endswith(".tar.gz"):
-            with tarfile.open(archive_path, "r:gz") as t:
-                for member in t.getmembers():
-                    if member.name.endswith("nuclei"):
-                        member.name = "nuclei"
-                        t.extract(member, path=BIN_DIR)
-                        break
+        # Try pinned version first
+        try:
+            if not _download_and_extract(NUCLEI_VERSION):
+                raise RuntimeError("extraction failed")
+        except Exception:
+            # Fall back to latest from GitHub API
+            latest = _github_latest_version()
+            if not latest or latest == NUCLEI_VERSION:
+                return None
+            if not _download_and_extract(latest):
+                return None
 
         # chmod +x
         NUCLEI_BIN.chmod(
-            NUCLEI_BIN.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+            NUCLEI_BIN.stat().st_mode
+            | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
         )
-        archive_path.unlink(missing_ok=True)
 
         # Sanity check
         subprocess.run(
@@ -95,7 +129,7 @@ def ensure_nuclei() -> str | None:
         )
         return str(NUCLEI_BIN)
 
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
