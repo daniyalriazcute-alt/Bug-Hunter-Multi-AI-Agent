@@ -1,0 +1,15 @@
+# Secrets — NEVER upload these
+.env
+.streamlit/secrets.toml
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Reports output
+reports/*.pdf
+
+# OS files
+.DS_Store
+Thumbs.db
