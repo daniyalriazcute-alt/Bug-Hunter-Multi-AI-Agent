@@ -25,8 +25,8 @@ DEFAULT_TIMEOUT: int = 30  # seconds per external tool call
 
 # ─── Nuclei (specific timeouts) ─────────────────────────────────────────────
 NUCLEI_TEMPLATE_TIMEOUT: int = int(os.getenv("NUCLEI_TEMPLATE_TIMEOUT", "300"))
-NUCLEI_SCAN_TIMEOUT: int = int(os.getenv("NUCLEI_SCAN_TIMEOUT", "60"))
-NUCLEI_RATE_LIMIT: int = int(os.getenv("NUCLEI_RATE_LIMIT", "50"))
+NUCLEI_SCAN_TIMEOUT: int = int(os.getenv("NUCLEI_SCAN_TIMEOUT", "120"))
+NUCLEI_RATE_LIMIT: int = int(os.getenv("NUCLEI_RATE_LIMIT", "150"))
 
 # ─── Severity mapping (CVSS v3.1) ───────────────────────────────────────────
 SEVERITY_RANGES = {
