@@ -1,4 +1,4 @@
-"""Download the nuclei binary at runtime (for platforms without apt package)."""
+"""Download the nuclei binary + templates at runtime."""
 from __future__ import annotations
 import platform
 import shutil
@@ -10,15 +10,14 @@ from pathlib import Path
 
 import requests
 
-# Try a recent known-good release. If this 404s, the installer will fall back
-# to querying the GitHub API for the latest stable release.
+from config import NUCLEI_TEMPLATE_TIMEOUT
+
 NUCLEI_VERSION = "3.3.7"
 BIN_DIR = Path.home() / ".local" / "bin"
 NUCLEI_BIN = BIN_DIR / "nuclei"
 
 
 def _github_latest_version() -> str | None:
-    """Query GitHub API for the latest nuclei release tag."""
     try:
         r = requests.get(
             "https://api.github.com/repos/projectdiscovery/nuclei/releases/latest",
@@ -26,17 +25,14 @@ def _github_latest_version() -> str | None:
             headers={"Accept": "application/vnd.github+json"},
         )
         r.raise_for_status()
-        tag = r.json().get("tag_name", "")
-        return tag.lstrip("v") or None
+        return r.json().get("tag_name", "").lstrip("v") or None
     except Exception:
         return None
 
 
 def _detect_asset_name(version: str) -> str:
-    """Return the correct nuclei release asset for this platform."""
     system = platform.system().lower()
     machine = platform.machine().lower()
-
     if system == "linux":
         arch = "arm64" if machine in ("aarch64", "arm64") else "amd64"
         return f"nuclei_{version}_linux_{arch}.zip"
@@ -49,22 +45,17 @@ def _detect_asset_name(version: str) -> str:
 
 
 def _download_and_extract(version: str) -> bool:
-    """Download nuclei of the given version and extract the binary."""
     asset = _detect_asset_name(version)
-    url = (
-        f"https://github.com/projectdiscovery/nuclei/releases/download/"
-        f"v{version}/{asset}"
-    )
+    url = (f"https://github.com/projectdiscovery/nuclei/releases/download/"
+           f"v{version}/{asset}")
     archive_path = BIN_DIR / asset
 
-    # Download
     with requests.get(url, stream=True, timeout=120) as r:
         r.raise_for_status()
         with open(archive_path, "wb") as f:
             for chunk in r.iter_content(chunk_size=65536):
                 f.write(chunk)
 
-    # Extract
     extracted = False
     if asset.endswith(".zip"):
         with zipfile.ZipFile(archive_path, "r") as z:
@@ -74,59 +65,64 @@ def _download_and_extract(version: str) -> bool:
                         shutil.copyfileobj(src, dst)
                     extracted = True
                     break
-    elif asset.endswith(".tar.gz"):
-        with tarfile.open(archive_path, "r:gz") as t:
-            for member in t.getmembers():
-                if member.name.endswith("nuclei"):
-                    member.name = "nuclei"
-                    t.extract(member, path=BIN_DIR)
-                    extracted = True
-                    break
-
     archive_path.unlink(missing_ok=True)
     return extracted
 
 
+def _ensure_templates(nuclei_path: str) -> bool:
+    """Download nuclei templates (once). Returns True if templates are ready."""
+    templates_dir = Path.home() / "nuclei-templates"
+    # Fast path: templates already exist
+    if templates_dir.exists() and any(templates_dir.glob("**/*.yaml")):
+        return True
+
+    try:
+        proc = subprocess.run(
+            [nuclei_path, "-update-templates", "-silent", "-no-color"],
+            capture_output=True, text=True,
+            timeout=NUCLEI_TEMPLATE_TIMEOUT, check=False,
+        )
+        return proc.returncode == 0 or templates_dir.exists()
+    except Exception:
+        return False
+
+
 def ensure_nuclei() -> str | None:
-    """
-    Ensure nuclei is available. Returns path to binary, or None on failure.
-    Downloads it once if missing.
-    """
+    """Ensure nuclei binary + templates are available."""
     # Already in PATH?
     existing = shutil.which("nuclei")
     if existing:
+        _ensure_templates(existing)  # idempotent
         return existing
 
-    # Already downloaded to ~/.local/bin?
+    # Already downloaded?
     if NUCLEI_BIN.exists():
+        _ensure_templates(str(NUCLEI_BIN))
         return str(NUCLEI_BIN)
 
     try:
         BIN_DIR.mkdir(parents=True, exist_ok=True)
 
-        # Try pinned version first
         try:
             if not _download_and_extract(NUCLEI_VERSION):
                 raise RuntimeError("extraction failed")
         except Exception:
-            # Fall back to latest from GitHub API
             latest = _github_latest_version()
             if not latest or latest == NUCLEI_VERSION:
                 return None
             if not _download_and_extract(latest):
                 return None
 
-        # chmod +x
         NUCLEI_BIN.chmod(
             NUCLEI_BIN.stat().st_mode
             | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
         )
 
-        # Sanity check
-        subprocess.run(
-            [str(NUCLEI_BIN), "-version"],
-            capture_output=True, timeout=15, check=False,
-        )
+        subprocess.run([str(NUCLEI_BIN), "-version"],
+                       capture_output=True, timeout=15, check=False)
+
+        # Download templates NOW (during app startup, not during first scan)
+        _ensure_templates(str(NUCLEI_BIN))
         return str(NUCLEI_BIN)
 
     except Exception:
@@ -134,7 +130,6 @@ def ensure_nuclei() -> str | None:
 
 
 def get_nuclei_path() -> str | None:
-    """Convenience: PATH lookup or downloaded binary."""
     return shutil.which("nuclei") or (
         str(NUCLEI_BIN) if NUCLEI_BIN.exists() else ensure_nuclei()
     )
