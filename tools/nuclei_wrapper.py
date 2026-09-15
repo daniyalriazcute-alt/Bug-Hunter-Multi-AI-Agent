@@ -1,46 +1,19 @@
-"""Nuclei wrapper — safe templates only. Auto-downloads binary if needed."""
+"""Nuclei wrapper — safe templates only. Assumes binary+templates are ready."""
 from __future__ import annotations
 import json
 import subprocess
-from config import DEFAULT_TIMEOUT
+from config import NUCLEI_SCAN_TIMEOUT, NUCLEI_RATE_LIMIT
 from tools.nuclei_installer import get_nuclei_path
 
 SAFE_EXCLUDE_TAGS = "dos,fuzz,intrusive,brute-force"
 
 
 def nuclei_scan(url: str, severity: str = "low,medium,high,critical") -> list[dict]:
-    """
-    Run nuclei with a safe template filter.
-    Returns:
-      - List of finding dicts on success
-      - [{"error": "..."}] on failure
-    """
+    """Run nuclei. Returns finding dicts, or [{'error': ...}] on failure."""
     nuclei_bin = get_nuclei_path()
-
     if not nuclei_bin:
-        return [{"error": "nuclei binary not available (download failed)"}]
+        return [{"error": "nuclei binary not available"}]
 
-    # Quick version sanity check
-    try:
-        ver_proc = subprocess.run(
-            [nuclei_bin, "-version"],
-            capture_output=True, text=True, timeout=15, check=False,
-        )
-        if ver_proc.returncode not in (0, 1):  # nuclei returns 1 for -version sometimes
-            return [{"error": f"nuclei -version exited with code {ver_proc.returncode}"}]
-    except Exception as e:
-        return [{"error": f"version check failed: {e}"}]
-
-    # Ensure templates are present (download on first run)
-    try:
-        subprocess.run(
-            [nuclei_bin, "-update-templates", "-silent", "-no-color"],
-            capture_output=True, text=True, timeout=180, check=False,
-        )
-    except Exception:
-        pass  # not fatal; nuclei will use any locally-available templates
-
-    # Actual scan
     cmd = [
         nuclei_bin,
         "-u", url,
@@ -49,10 +22,11 @@ def nuclei_scan(url: str, severity: str = "low,medium,high,critical") -> list[di
         "-jsonl",
         "-silent",
         "-no-color",
-        "-timeout", "5",
-        "-rate-limit", "20",
+        "-timeout", "5",                    # per-request timeout
+        "-rate-limit", str(NUCLEI_RATE_LIMIT),
         "-disable-update-check",
         "-no-interactsh",
+        "-no-color",
     ]
 
     try:
@@ -60,14 +34,14 @@ def nuclei_scan(url: str, severity: str = "low,medium,high,critical") -> list[di
             cmd,
             capture_output=True,
             text=True,
-            timeout=DEFAULT_TIMEOUT * 4,  # nuclei may be slower than other tools
+            timeout=NUCLEI_SCAN_TIMEOUT,
             check=False,
         )
 
-        # nuclei returns non-zero if any error occurred
+        # Non-zero exit + no stdout = real failure
         if proc.returncode != 0 and not proc.stdout.strip():
             err = (proc.stderr or "unknown error").strip()[:300]
-            return [{"error": f"nuclei exit code {proc.returncode}: {err}"}]
+            return [{"error": f"nuclei exit {proc.returncode}: {err}"}]
 
         findings: list[dict] = []
         for line in proc.stdout.splitlines():
@@ -81,6 +55,6 @@ def nuclei_scan(url: str, severity: str = "low,medium,high,critical") -> list[di
         return findings
 
     except subprocess.TimeoutExpired:
-        return [{"error": "nuclei timed out"}]
+        return [{"error": f"nuclei timed out after {NUCLEI_SCAN_TIMEOUT}s"}]
     except Exception as e:
         return [{"error": str(e)}]
